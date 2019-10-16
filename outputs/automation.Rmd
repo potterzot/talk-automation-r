@@ -48,6 +48,16 @@ Install them all with `install.packages(c("here", "dplyr", "tidyr", "purrr", "fu
 
 ## Looping with `apply`, `lapply`, `tapply`
 
+`apply` applies a function to a dimension of data
+```{r}
+# if d is a three dimensional dataset
+d <- array(rnorm(24), dim = c(3,2,4))
+
+d1 <- apply(d, c(1,2), mean)
+
+grid <- expand.grid(x <- row.names(d), y = colnames(d))
+
+```
 
 
 
@@ -67,8 +77,13 @@ We could load each of them and then append:
 ```{r}
 # ... so boring ... and so error prone ...
 d1 <- readRDS(here("data", files[[1]]))
+d2 <- readRDS(here("data", files[[2]]))
+d2 <- readRDS(here("data", files[[3]]))
+d3 <- readRDS(here("data", files[[4]]))
+d4 <- readRDS(here("data", files[[5]]))
+d5 <- readRDS(here("data", files[[6]]))
 
-# d <- Reduce(rbind, list(d1, d2, d3, d4))
+# d <- Reduce(rbind, list(d1, d2, d3, d4, d5))
 ```
 
 Instead you can iterate over the files and read them in:
@@ -82,9 +97,17 @@ for (i in seq_along(files)) {
 
 # Using lapply
 d_list <- lapply(files, function(f) {
-  readRDS(here("data", f))
+  dtmp <- readRDS(here("data", f))
+  dtmp$name <- f
   # You can do a lot of data processing here
 })
+
+lapply(files, function(f) {
+  print(f)
+})
+
+str(d_list[[1]])
+sapply(d_list[[1]], typeof)
 
 # Using mclapply
 library(parallel)
@@ -113,7 +136,8 @@ d <- dplyr::bind_rows(d_list)
 d <- purrr::map_dfr(d_list, ~ .)
 
 # Parallel
-d <- furrr::future_map_dfr(d_list, ~ .)
+d_wa <- furrr::future_map_dfr(d_list, ~ filter(., state_alpha == "WA"))
+
 ```
 
 ### Clean
@@ -166,7 +190,7 @@ __Reasons to use the load - clean - combine ordering__
 
 
 ```{r}
-d_list <- lapply(files, function(f) {
+d_list2 <- lapply(files, function(f) {
   d <- readRDS(here("data", f)) %>%
     # Keep just the census variables
     filter(year %in% seq(1997,2017, by = 5))
@@ -196,7 +220,7 @@ d_list <- lapply(files, function(f) {
 })
 
 # CAREFUL! Don't rbind because we've already transformed the data, so we have to merge instead
-d <- Reduce(function(x,y) { merge(x,y, by = c("state_alpha", "fips", "year"), all.x = TRUE) }, d_list)
+d <- Reduce(function(x,y) { merge(x,y, by = c("state_alpha", "fips", "year"), all.x = TRUE) }, d_list2)
 ```
 
 ## Looping for analysis
@@ -215,16 +239,41 @@ d2 <- d_tdy %>%
 d_west <- d2 %>%
   filter(state_alpha %in% c("WA", "OR", "ID", "MT", "CA", "AZ", "NV", "UT", "NM", "CO", "WY"))
 m <- lm(farms_rented_pct ~ profit_per_farm + fips + state_alpha:year, data = d_west)
+summary(m)
 ```
 
 Often we want to run a number of regression models and output the results as a list
 
 ```{r}
+## Loop over deciles
+dsub1 <- d_west %>% filter(ntile(d_west$profit_per_farm, 10) == 1)
+m1 <- lm(farms_rented_pct ~ profit_per_farm + fips + state_alpha:year, data = dsub1)
+
+dsub2 <- d_west %>% filter(ntile(d_west$profit_per_farm, 10) == 2)
+m2 <- lm(farms_rented_pct ~ profit_per_farm + fips + state_alpha:year, data = dsub2)
+
+dsub3 <- d_west %>% filter(ntile(d_west$profit_per_farm, 10) == 3)
+m3 <- lm(farms_rented_pct ~ profit_per_farm + fips + state_alpha:year, data = dsub3)
+
 # Using lapply
 result_list <- lapply(1:10, function(i) {
-  dsub <- d_west %>% filter(ntile(d_west$profit_per_farm, 10) == 1)
+  dsub <- d_west %>% filter(ntile(d_west$profit_per_farm, 10) == i)
   m <- lm(farms_rented_pct ~ profit_per_farm + fips + state_alpha:year, data = dsub)
+  # Could be: glm, lfe, plm, nlme4
+  m
 })
+names(result_list) <- paste0("dec_", 1:10)
+
+# Using different model specifications
+result_list <- list()
+for(m in models) {
+  key <- paste("profit_only")
+  result_list[[key]] <- lm(farms_rented_pct ~ profit_per_farm, data = dsub)
+  
+  key <- paste("profit_fips")
+  result_list[[key]] <- lm(farms_rented_pct ~ profit_per_farm + fips, data = dsub)
+}
+
 
 # Or with purrr
 result_list <- d_west %>%
@@ -253,4 +302,25 @@ stat_list <- lapply(result_list, function(r) {
 })
 names(stat_list) <- paste0("dec_", 1:10)
 sumstats <- bind_rows(stat_list)
+sumstats <- Reduce(rbind, stat_list)
+sumstats <- rbindlist(stat_list)
+
+
+filter(sumstats, AIC == pmin(AIC))
+```
+
+
+```{r}
+regress <- function(d, y_var, x_vars) {
+  f <- as.formula(paste0(y_var, " ~ ", paste0(x_vars, collapse = " + ")))
+  lm(f, d)
+}
+
+# x_vars <- list of all variables
+# x_interacts <- list of all interactions
+
+for(seq_along(x_vars)) {
+  regress(d, y_var, x_vars[i])
+}
+
 ```
